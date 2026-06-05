@@ -8,7 +8,7 @@ import fitz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from google.oauth2.service_account import Credentials
- 
+   
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY  = os.environ["ANTHROPIC_KEY"]
 SHEET_ID       = os.environ["SHEET_ID"]
