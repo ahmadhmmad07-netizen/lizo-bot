@@ -8,14 +8,17 @@ import fitz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from google.oauth2.service_account import Credentials
-   
+
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY  = os.environ["ANTHROPIC_KEY"]
 SHEET_ID       = os.environ["SHEET_ID"]
 GOOGLE_CREDS   = json.loads(os.environ["GOOGLE_CREDS_JSON"])
+# اسم الموديل من Environment Variable أو القيمة الافتراضية
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info(f"Using model: {MODEL}")
 
 def get_sheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -53,7 +56,7 @@ SYSTEM = """أنت محاسب ذكي لمتجر Lizo السعودي. حلل ال
 def ask_claude_image(b64, mt, caption=""):
     c = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     note = f"\nملاحظة: {caption}" if caption else ""
-    r = c.messages.create(model="claude-sonnet-4-20250514", max_tokens=800, system=SYSTEM,
+    r = c.messages.create(model=MODEL, max_tokens=800, system=SYSTEM,
         messages=[{"role":"user","content":[
             {"type":"image","source":{"type":"base64","media_type":mt,"data":b64}},
             {"type":"text","text":f"حلل وأرجع JSON فقط.{note}"}]}])
@@ -63,7 +66,7 @@ def ask_claude_image(b64, mt, caption=""):
 
 def ask_claude_text(text):
     c = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    r = c.messages.create(model="claude-sonnet-4-20250514", max_tokens=800, system=SYSTEM,
+    r = c.messages.create(model=MODEL, max_tokens=800, system=SYSTEM,
         messages=[{"role":"user","content":f"حلل وأرجع JSON فقط:\n{text}"}])
     raw = r.content[0].text.strip().strip("```").strip()
     if raw.startswith("json"): raw = raw[4:].strip()
@@ -144,7 +147,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    logger.info("🤖 Lizo Bot running...")
+    logger.info(f"🤖 Lizo Bot running with model: {MODEL}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
