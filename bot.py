@@ -6,7 +6,7 @@ import anthropic
 import gspread
 import fitz
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from google.oauth2.service_account import Credentials
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -34,21 +34,11 @@ def save_to_sheet(data: dict, user: str):
     vals = ws.col_values(1)
     nums = [int(v) for v in vals[1:] if str(v).isdigit()]
     num  = max(nums) + 1 if nums else 1
-    ws.append_row([
-        num,
-        data.get("date",""),
-        data.get("type",""),
-        data.get("category",""),
-        data.get("party",""),
-        data.get("description",""),
-        data.get("amount",""),
-        data.get("direction",""),
-        user,
-        data.get("notes","")
-    ])
+    ws.append_row([num, data.get("date",""), data.get("type",""), data.get("category",""),
+                   data.get("party",""), data.get("description",""), data.get("amount",""),
+                   data.get("direction",""), user, data.get("notes","")])
 
-SYSTEM = """أنت محاسب ذكي لمتجر Lizo السعودي.
-حلل الفاتورة أو الإيصال وأرجع JSON فقط بهذا الشكل:
+SYSTEM = """أنت محاسب ذكي لمتجر Lizo السعودي. حلل الفاتورة وأرجع JSON فقط:
 {
   "date": "DD/MM/YYYY",
   "type": "فاتورة شراء أو مبيعة أو تحويل صادر أو تحويل وارد",
@@ -60,42 +50,33 @@ SYSTEM = """أنت محاسب ذكي لمتجر Lizo السعودي.
   "notes": "ملاحظة"
 }"""
 
-def ask_claude_image(b64: str, mt: str, caption: str = "") -> dict:
-    c    = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+def ask_claude_image(b64, mt, caption=""):
+    c = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
     note = f"\nملاحظة: {caption}" if caption else ""
-    r    = c.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=800,
-        system=SYSTEM,
+    r = c.messages.create(model="claude-sonnet-4-20250514", max_tokens=800, system=SYSTEM,
         messages=[{"role":"user","content":[
             {"type":"image","source":{"type":"base64","media_type":mt,"data":b64}},
-            {"type":"text","text":f"حلل وأرجع JSON فقط.{note}"}
-        ]}]
-    )
+            {"type":"text","text":f"حلل وأرجع JSON فقط.{note}"}]}])
     raw = r.content[0].text.strip().strip("```").strip()
     if raw.startswith("json"): raw = raw[4:].strip()
     return json.loads(raw)
 
-def ask_claude_text(text: str) -> dict:
+def ask_claude_text(text):
     c = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    r = c.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=800,
-        system=SYSTEM,
-        messages=[{"role":"user","content":f"حلل وأرجع JSON فقط:\n{text}"}]
-    )
+    r = c.messages.create(model="claude-sonnet-4-20250514", max_tokens=800, system=SYSTEM,
+        messages=[{"role":"user","content":f"حلل وأرجع JSON فقط:\n{text}"}])
     raw = r.content[0].text.strip().strip("```").strip()
     if raw.startswith("json"): raw = raw[4:].strip()
     return json.loads(raw)
 
-def pdf_to_b64(pdf_bytes: bytes) -> str:
+def pdf_to_b64(pdf_bytes):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pix = doc[0].get_pixmap(matrix=fitz.Matrix(2,2))
     return base64.standard_b64encode(pix.tobytes("jpeg")).decode()
 
 EMOJI = {"فاتورة شراء":"🔴","مبيعة":"🟢","تحويل صادر":"🔵","تحويل وارد":"🟡"}
 
-def reply_text(data: dict) -> str:
+def build_reply(data):
     e = EMOJI.get(data.get("type",""),"📄")
     t = (f"{e} *تم التسجيل!*\n\n"
          f"📅 {data.get('date','—')}\n"
@@ -107,27 +88,27 @@ def reply_text(data: dict) -> str:
     return t
 
 async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg  = update.message
+    msg = update.message
     user = msg.from_user.first_name or "مجهول"
     await msg.reply_text("⏳ جاري التحليل...")
     try:
-        f    = await msg.photo[-1].get_file()
-        raw  = await f.download_as_bytearray()
-        b64  = base64.standard_b64encode(bytes(raw)).decode()
+        f = await msg.photo[-1].get_file()
+        raw = await f.download_as_bytearray()
+        b64 = base64.standard_b64encode(bytes(raw)).decode()
         data = ask_claude_image(b64, "image/jpeg", msg.caption or "")
         save_to_sheet(data, user)
-        await msg.reply_text(reply_text(data), parse_mode="Markdown")
+        await msg.reply_text(build_reply(data), parse_mode="Markdown")
     except Exception as e:
         logger.error(e)
         await msg.reply_text(f"❌ خطأ: {e}")
 
 async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg  = update.message
-    doc  = msg.document
+    msg = update.message
+    doc = msg.document
     user = msg.from_user.first_name or "مجهول"
     await msg.reply_text("⏳ جاري التحليل...")
     try:
-        f   = await doc.get_file()
+        f = await doc.get_file()
         raw = await f.download_as_bytearray()
         if doc.mime_type == "application/pdf":
             b64, mt = pdf_to_b64(bytes(raw)), "image/jpeg"
@@ -138,13 +119,13 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         data = ask_claude_image(b64, mt, msg.caption or "")
         save_to_sheet(data, user)
-        await msg.reply_text(reply_text(data), parse_mode="Markdown")
+        await msg.reply_text(build_reply(data), parse_mode="Markdown")
     except Exception as e:
         logger.error(e)
         await msg.reply_text(f"❌ خطأ: {e}")
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg  = update.message
+    msg = update.message
     text = msg.text or ""
     user = msg.from_user.first_name or "مجهول"
     if not any(k in text for k in ["ريال","فاتورة","تحويل","SAR","دفعت","اشتريت"]):
@@ -153,13 +134,13 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         data = ask_claude_text(text)
         save_to_sheet(data, user)
-        await msg.reply_text(reply_text(data), parse_mode="Markdown")
+        await msg.reply_text(build_reply(data), parse_mode="Markdown")
     except Exception as e:
         logger.error(e)
         await msg.reply_text(f"❌ خطأ: {e}")
 
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
